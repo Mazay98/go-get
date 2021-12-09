@@ -1,92 +1,107 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
-	"go-get/internal/parser"
-	"go-get/internal/saver"
+	"io/ioutil"
 	"log"
+	"mime"
+	"net/http"
 	"net/url"
 	"os"
 	"sync"
+	"time"
 )
 
-var urls []string
+var links []string
+var chanBuf int
 
 func init() {
-	fmt.Println("Get urls ...")
+	fmt.Println("Get links ...")
 
-	if err := getUrls(); err != nil {
-		fmt.Printf("error: %v\n", err)
-		os.Exit(1)
+	var link string
+	flag.StringVar(&link, "links", "", "links for parse")
+	flag.IntVar(&chanBuf, "ch-buff", 10, "size buffer channel")
+
+	flag.Parse()
+	links = flag.Args()
+	if len(links) == 0 {
+		log.Fatal("You don`t added a links")
 	}
 }
 
 func main() {
-	preparedUrls := make(chan string)
-	httpResponses := make(chan *parser.HttpResponse)
+	preparedUrls := make(chan string, chanBuf)
 
 	var wg sync.WaitGroup
 
 	go func() {
-		for url := range preparedUrls {
-			resp, err := parser.DoHttp(url)
+		defer wg.Done()
+		for preparedUrl := range preparedUrls {
+			log.Print(preparedUrl)
 
+			err := parseAndSaveToFile(preparedUrl)
 			if err != nil {
 				log.Println(err.Error())
 				wg.Done()
 				continue
 			}
-
-			log.Printf("Page %s has been loaded | latency %d\n", url, resp.Latency)
-
-			httpResponses <- resp
 		}
 	}()
 
-	go func() {
-		for resp := range httpResponses {
-			fileName, err := saver.SaveResponseToFile(resp)
-
-			if err != nil {
-				log.Println(err.Error())
-				wg.Done()
-				continue
-			}
-
-			log.Printf("Page %s has been saved to -> %s\n", resp.Url, fileName)
-
-			wg.Done()
-		}
-	}()
-
-	for _, rawUrl := range urls {
-		wg.Add(1)
-
-		url, _ := url.Parse(rawUrl)
-
-		if url.Scheme == "" {
-			preparedUrls <- "https://" + rawUrl
+	for _, rawLink := range links {
+		preparedUrl, err := url.Parse(rawLink)
+		if err != nil {
+			log.Println(err.Error())
 			continue
 		}
+		if preparedUrl.Scheme == "" {
+			rawLink = "https://" + rawLink
+		}
 
-		preparedUrls <- rawUrl
+		preparedUrls <- rawLink
+		wg.Add(1)
 	}
 	close(preparedUrls)
 
 	wg.Wait()
 }
 
-func getUrls() error {
-	var link string
-	flag.StringVar(&link, "urls", "", "urls for parse")
-	flag.Parse()
-	urls = flag.Args()
+func parseAndSaveToFile(url string) error {
+	t := time.Now()
 
-	if len(urls) == 0 {
-		return errors.New("You don`t added a urls")
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("Failed to get <%s>\nError: %s\n", url, err.Error())
 	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	log.Printf("Page %s has been loaded | latency %d\n", url, time.Since(t).Milliseconds())
+
+	fileTypes, err := mime.ExtensionsByType(resp.Header.Get("Content-Type"))
+	if err != nil {
+		return err
+	}
+
+	fileName := fmt.Sprintf("go-get_file%s", fileTypes[0])
+	i := 0
+
+	for {
+		if _, err := os.Stat(fileName); os.IsNotExist(err) {
+			break
+		}
+
+		i++
+		fileName = fmt.Sprintf("go-get_file (%d)%s", i, fileTypes[0])
+	}
+
+	err = ioutil.WriteFile(fileName, body, 0666)
+	if err != nil {
+		return fmt.Errorf("Failed to get body document <%s>\nError: %s\n", url, err.Error())
+	}
+
+	defer resp.Body.Close()
+	log.Printf("Page %s has been saved to -> %s\n", url, fileName)
 
 	return nil
 }
