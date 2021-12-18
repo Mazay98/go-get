@@ -16,21 +16,19 @@ import (
 var links []string
 var chanBuf int
 
-func init() {
+func main() {
 	fmt.Println("Get links ...")
 
 	var link string
 	flag.StringVar(&link, "links", "", "links for parse")
 	flag.IntVar(&chanBuf, "ch-buff", 10, "size buffer channel")
-
 	flag.Parse()
+
 	links = flag.Args()
 	if len(links) == 0 {
 		log.Fatal("You don`t added a links")
 	}
-}
 
-func main() {
 	preparedUrls := make(chan string, chanBuf)
 
 	var wg sync.WaitGroup
@@ -76,6 +74,8 @@ func parseAndSaveToFile(url string) error {
 	}
 
 	body, err := ioutil.ReadAll(resp.Body)
+	resp.Body.Close()
+
 	log.Printf("Page %s has been loaded | latency %d\n", url, time.Since(t).Milliseconds())
 
 	fileTypes, err := mime.ExtensionsByType(resp.Header.Get("Content-Type"))
@@ -100,7 +100,6 @@ func parseAndSaveToFile(url string) error {
 		return fmt.Errorf("Failed to get body document <%s>\nError: %s\n", url, err.Error())
 	}
 
-	defer resp.Body.Close()
 	log.Printf("Page %s has been saved to -> %s\n", url, fileName)
 
 	return nil
